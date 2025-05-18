@@ -10,7 +10,6 @@
   "observability": {
     "enabled": true
   },
-  "routes": ["pi.brandonhol.land/*"],
   "r2_buckets": [
     {
       "bucket_name": "brandonholland",
