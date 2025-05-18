@@ -12,7 +12,7 @@ async function getPiDigits(env: Bindings, start: number, length: number) {
   
   try {
     // Limit the maximum chunk size to avoid memory issues
-    const safeLength = Math.min(length, 1000);
+    const safeLength = Math.min(length, 100_000);
     
     const object = await env.PI.get("pi-billion.txt", {
       range: {
@@ -43,7 +43,7 @@ app.get("/pi", async (c) => {
   const start = parseInt(c.req.query("start") || "0", 10);
   const length = parseInt(c.req.query("length") || "10", 10);
 
-  if (isNaN(start) || isNaN(length) || start < 0 || length > 10_000) {
+  if (isNaN(start) || isNaN(length) || start < 0 || length > 100_000) {
     console.error(`Invalid query parameters: start=${start}, length=${length}`);
     return c.text("Invalid query", 400);
   }
@@ -104,12 +104,13 @@ app.get("/", (c) => {
         const piDigitsElement = document.getElementById('pi-digits');
         
         let currentPosition = 1; // Start after the decimal point (3.)
-        const chunkSize = 5000; // Larger chunk size for prefetching
-        const prefetchThreshold = 3; // Number of chunks to prefetch ahead
+        const chunkSize = 100000; // Larger chunk size for prefetching
+        const prefetchThreshold = 10; // Number of chunks to prefetch ahead
         let isLoading = false;
         let hasMoreDigits = true;
         let prefetchedDigits = '';
         let nextFetchPosition = 1;
+        let prefetchQueue = [];
         
         // Load more digits
         async function fetchMoreDigits(position, length) {
@@ -134,39 +135,53 @@ app.get("/", (c) => {
           }
         }
         
-        // Prefetch digits in advance
-        async function prefetchDigits() {
-          if (!hasMoreDigits || isLoading) return;
+        // Start multiple prefetch requests in parallel
+        function startPrefetching() {
+          // Clear existing queue
+          prefetchQueue = [];
           
-          isLoading = true;
-          
-          try {
-            const newDigits = await fetchMoreDigits(nextFetchPosition, chunkSize);
-            prefetchedDigits += newDigits;
-            nextFetchPosition += newDigits.length;
+          // Start multiple prefetch requests
+          for (let i = 0; i < prefetchThreshold; i++) {
+            const fetchPosition = nextFetchPosition + (i * chunkSize);
+            const promise = fetchMoreDigits(fetchPosition, chunkSize)
+              .then(digits => {
+                if (digits.length > 0) {
+                  prefetchedDigits += digits;
+                  return digits.length;
+                }
+                return 0;
+              });
             
-            // Continue prefetching if we need more
-            if (prefetchedDigits.length < chunkSize * prefetchThreshold && hasMoreDigits) {
-              setTimeout(prefetchDigits, 100);
-            }
-          } finally {
-            isLoading = false;
+            prefetchQueue.push(promise);
           }
+          
+          // When all prefetches complete, update the next fetch position
+          Promise.all(prefetchQueue)
+            .then(results => {
+              const totalFetched = results.reduce((sum, length) => sum + length, 0);
+              nextFetchPosition += totalFetched;
+              
+              // If we still have room for more prefetching, continue
+              if (hasMoreDigits && prefetchedDigits.length < chunkSize * prefetchThreshold) {
+                setTimeout(startPrefetching, 0);
+              }
+            });
         }
         
         // Add digits to the display
         function addDigitsToDisplay() {
           if (prefetchedDigits.length > 0) {
             // Take a portion of the prefetched digits
-            const digitsToAdd = prefetchedDigits.substring(0, chunkSize);
-            prefetchedDigits = prefetchedDigits.substring(chunkSize);
+            const displayChunkSize = Math.min(chunkSize, prefetchedDigits.length);
+            const digitsToAdd = prefetchedDigits.substring(0, displayChunkSize);
+            prefetchedDigits = prefetchedDigits.substring(displayChunkSize);
             
             piDigitsElement.textContent += digitsToAdd;
             currentPosition += digitsToAdd.length;
             
             // Trigger more prefetching if our buffer is getting low
-            if (prefetchedDigits.length < chunkSize * prefetchThreshold && !isLoading) {
-              prefetchDigits();
+            if (prefetchedDigits.length < chunkSize * (prefetchThreshold / 2) && prefetchQueue.length === 0 && hasMoreDigits) {
+              startPrefetching();
             }
           }
         }
@@ -176,29 +191,42 @@ app.get("/", (c) => {
           const scrollPosition = window.innerHeight + window.scrollY;
           const bodyHeight = document.body.offsetHeight;
           
-          // Load more when user scrolls near the bottom (300px threshold)
-          if (scrollPosition >= bodyHeight - 300) {
+          // Load more when user scrolls near the bottom (500px threshold)
+          if (scrollPosition >= bodyHeight - 500) {
             addDigitsToDisplay();
           }
         }
         
         // Start prefetching immediately
-        prefetchDigits();
+        startPrefetching();
         
         // Initial display after a short delay to allow prefetching to start
         setTimeout(() => {
           addDigitsToDisplay();
-        }, 100);
+        }, 50);
         
-        // Add scroll event listener
-        window.addEventListener('scroll', checkScroll);
+        // Add scroll event listener with throttling to improve performance
+        let scrollTimeout;
+        window.addEventListener('scroll', () => {
+          if (!scrollTimeout) {
+            scrollTimeout = setTimeout(() => {
+              checkScroll();
+              scrollTimeout = null;
+            }, 50);
+          }
+        });
         
         // Also check periodically in case the page is taller than the viewport
         setInterval(() => {
-          if (document.body.offsetHeight <= window.innerHeight * 1.5 && prefetchedDigits.length > 0) {
+          if (document.body.offsetHeight <= window.innerHeight * 2 && prefetchedDigits.length > 0) {
             addDigitsToDisplay();
           }
-        }, 200);
+          
+          // If we're running low on prefetched digits, start more prefetching
+          if (prefetchedDigits.length < chunkSize * (prefetchThreshold / 2) && prefetchQueue.length === 0 && hasMoreDigits) {
+            startPrefetching();
+          }
+        }, 100);
       </script>
     </body>
     </html>
