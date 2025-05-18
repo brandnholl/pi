@@ -67,82 +67,54 @@ app.get("/", (c) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Pi Digits Viewer</title>
+      <title>Pi Digits</title>
       <style>
         body {
           font-family: monospace;
-          max-width: 800px;
-          margin: 0 auto;
-          padding: 20px;
-          background-color: #f5f5f5;
-        }
-        h1 {
-          text-align: center;
-          color: #333;
+          margin: 0;
+          padding: 0;
+          background-color: white;
+          color: black;
+          display: flex;
+          justify-content: center;
+          align-items: flex-start;
+          min-height: 100vh;
+          overflow-x: hidden;
         }
         #pi-container {
-          background-color: white;
           padding: 20px;
-          border-radius: 5px;
-          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-          margin-top: 20px;
           font-size: 16px;
-          line-height: 1.6;
-          overflow-wrap: break-word;
-          white-space: pre-wrap;
-        }
-        #loading {
+          line-height: 1.5;
+          max-width: 100%;
           text-align: center;
           margin-top: 20px;
-          color: #666;
         }
-        .digit-group {
-          display: inline-block;
-          margin-right: 5px;
-        }
-        .decimal-point {
-          color: red;
-          font-weight: bold;
+        #pi-digits {
+          word-wrap: break-word;
+          white-space: pre-wrap;
         }
       </style>
     </head>
     <body>
-      <h1>π Digits Viewer</h1>
       <div id="pi-container">
-        <span class="decimal-point">3.</span><span id="pi-digits"></span>
+        <span id="pi-digits">3.</span>
       </div>
-      <div id="loading">Loading more digits...</div>
       
       <script>
         const piDigitsElement = document.getElementById('pi-digits');
-        const loadingElement = document.getElementById('loading');
         
         let currentPosition = 1; // Start after the decimal point (3.)
-        const chunkSize = 1000;
+        const chunkSize = 5000; // Larger chunk size for prefetching
+        const prefetchThreshold = 3; // Number of chunks to prefetch ahead
         let isLoading = false;
         let hasMoreDigits = true;
-        
-        // Format digits with groups of 5 for better readability
-        function formatDigits(digits) {
-          let formatted = '';
-          for (let i = 0; i < digits.length; i++) {
-            if (i > 0 && i % 5 === 0) {
-              formatted += ' ';
-            }
-            formatted += digits[i];
-          }
-          return formatted;
-        }
+        let prefetchedDigits = '';
+        let nextFetchPosition = 1;
         
         // Load more digits
-        async function loadMoreDigits() {
-          if (isLoading || !hasMoreDigits) return;
-          
-          isLoading = true;
-          loadingElement.textContent = 'Loading more digits...';
-          
+        async function fetchMoreDigits(position, length) {
           try {
-            const response = await fetch(\`/pi?start=\${currentPosition}&length=\${chunkSize}\`);
+            const response = await fetch(\`/pi?start=\${position}&length=\${length}\`);
             
             if (!response.ok) {
               throw new Error('Failed to fetch Pi digits');
@@ -152,18 +124,50 @@ app.get("/", (c) => {
             
             if (digits.length === 0) {
               hasMoreDigits = false;
-              loadingElement.textContent = 'No more digits available';
-              return;
+              return '';
             }
             
-            piDigitsElement.innerHTML += formatDigits(digits);
-            currentPosition += digits.length;
-            
+            return digits;
           } catch (error) {
             console.error('Error loading Pi digits:', error);
-            loadingElement.textContent = 'Error loading digits. Scroll to try again.';
+            return '';
+          }
+        }
+        
+        // Prefetch digits in advance
+        async function prefetchDigits() {
+          if (!hasMoreDigits || isLoading) return;
+          
+          isLoading = true;
+          
+          try {
+            const newDigits = await fetchMoreDigits(nextFetchPosition, chunkSize);
+            prefetchedDigits += newDigits;
+            nextFetchPosition += newDigits.length;
+            
+            // Continue prefetching if we need more
+            if (prefetchedDigits.length < chunkSize * prefetchThreshold && hasMoreDigits) {
+              setTimeout(prefetchDigits, 100);
+            }
           } finally {
             isLoading = false;
+          }
+        }
+        
+        // Add digits to the display
+        function addDigitsToDisplay() {
+          if (prefetchedDigits.length > 0) {
+            // Take a portion of the prefetched digits
+            const digitsToAdd = prefetchedDigits.substring(0, chunkSize);
+            prefetchedDigits = prefetchedDigits.substring(chunkSize);
+            
+            piDigitsElement.textContent += digitsToAdd;
+            currentPosition += digitsToAdd.length;
+            
+            // Trigger more prefetching if our buffer is getting low
+            if (prefetchedDigits.length < chunkSize * prefetchThreshold && !isLoading) {
+              prefetchDigits();
+            }
           }
         }
         
@@ -172,24 +176,29 @@ app.get("/", (c) => {
           const scrollPosition = window.innerHeight + window.scrollY;
           const bodyHeight = document.body.offsetHeight;
           
-          // Load more when user scrolls near the bottom (200px threshold)
-          if (scrollPosition >= bodyHeight - 200 && !isLoading) {
-            loadMoreDigits();
+          // Load more when user scrolls near the bottom (300px threshold)
+          if (scrollPosition >= bodyHeight - 300) {
+            addDigitsToDisplay();
           }
         }
         
-        // Initial load
-        loadMoreDigits();
+        // Start prefetching immediately
+        prefetchDigits();
+        
+        // Initial display after a short delay to allow prefetching to start
+        setTimeout(() => {
+          addDigitsToDisplay();
+        }, 100);
         
         // Add scroll event listener
         window.addEventListener('scroll', checkScroll);
         
         // Also check periodically in case the page is taller than the viewport
         setInterval(() => {
-          if (document.body.offsetHeight <= window.innerHeight && !isLoading && hasMoreDigits) {
-            loadMoreDigits();
+          if (document.body.offsetHeight <= window.innerHeight * 1.5 && prefetchedDigits.length > 0) {
+            addDigitsToDisplay();
           }
-        }, 1000);
+        }, 200);
       </script>
     </body>
     </html>
