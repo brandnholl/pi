@@ -59,4 +59,141 @@ app.get("/pi", async (c) => {
   });
 });
 
+// Root route to serve the Pi digits UI
+app.get("/", (c) => {
+  return c.html(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Pi Digits Viewer</title>
+      <style>
+        body {
+          font-family: monospace;
+          max-width: 800px;
+          margin: 0 auto;
+          padding: 20px;
+          background-color: #f5f5f5;
+        }
+        h1 {
+          text-align: center;
+          color: #333;
+        }
+        #pi-container {
+          background-color: white;
+          padding: 20px;
+          border-radius: 5px;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          margin-top: 20px;
+          font-size: 16px;
+          line-height: 1.6;
+          overflow-wrap: break-word;
+          white-space: pre-wrap;
+        }
+        #loading {
+          text-align: center;
+          margin-top: 20px;
+          color: #666;
+        }
+        .digit-group {
+          display: inline-block;
+          margin-right: 5px;
+        }
+        .decimal-point {
+          color: red;
+          font-weight: bold;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>π Digits Viewer</h1>
+      <div id="pi-container">
+        <span class="decimal-point">3.</span><span id="pi-digits"></span>
+      </div>
+      <div id="loading">Loading more digits...</div>
+      
+      <script>
+        const piDigitsElement = document.getElementById('pi-digits');
+        const loadingElement = document.getElementById('loading');
+        
+        let currentPosition = 1; // Start after the decimal point (3.)
+        const chunkSize = 1000;
+        let isLoading = false;
+        let hasMoreDigits = true;
+        
+        // Format digits with groups of 5 for better readability
+        function formatDigits(digits) {
+          let formatted = '';
+          for (let i = 0; i < digits.length; i++) {
+            if (i > 0 && i % 5 === 0) {
+              formatted += ' ';
+            }
+            formatted += digits[i];
+          }
+          return formatted;
+        }
+        
+        // Load more digits
+        async function loadMoreDigits() {
+          if (isLoading || !hasMoreDigits) return;
+          
+          isLoading = true;
+          loadingElement.textContent = 'Loading more digits...';
+          
+          try {
+            const response = await fetch(\`/pi?start=\${currentPosition}&length=\${chunkSize}\`);
+            
+            if (!response.ok) {
+              throw new Error('Failed to fetch Pi digits');
+            }
+            
+            const digits = await response.text();
+            
+            if (digits.length === 0) {
+              hasMoreDigits = false;
+              loadingElement.textContent = 'No more digits available';
+              return;
+            }
+            
+            piDigitsElement.innerHTML += formatDigits(digits);
+            currentPosition += digits.length;
+            
+          } catch (error) {
+            console.error('Error loading Pi digits:', error);
+            loadingElement.textContent = 'Error loading digits. Scroll to try again.';
+          } finally {
+            isLoading = false;
+          }
+        }
+        
+        // Check if we need to load more digits when scrolling
+        function checkScroll() {
+          const scrollPosition = window.innerHeight + window.scrollY;
+          const bodyHeight = document.body.offsetHeight;
+          
+          // Load more when user scrolls near the bottom (200px threshold)
+          if (scrollPosition >= bodyHeight - 200 && !isLoading) {
+            loadMoreDigits();
+          }
+        }
+        
+        // Initial load
+        loadMoreDigits();
+        
+        // Add scroll event listener
+        window.addEventListener('scroll', checkScroll);
+        
+        // Also check periodically in case the page is taller than the viewport
+        setInterval(() => {
+          if (document.body.offsetHeight <= window.innerHeight && !isLoading && hasMoreDigits) {
+            loadMoreDigits();
+          }
+        }, 1000);
+      </script>
+    </body>
+    </html>
+  `);
+});
+
 export default app;
