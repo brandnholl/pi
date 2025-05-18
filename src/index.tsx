@@ -7,15 +7,18 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-// Function to get pi digits using streaming
+// Function to get pi digits using streaming with smaller chunks
 async function getPiDigits(env: Bindings, start: number, length: number) {
   console.log(`Fetching pi digits from ${start} to ${start + length}`);
   
   try {
+    // Limit the maximum chunk size to avoid memory issues
+    const safeLength = Math.min(length, 1000);
+    
     const object = await env.PI.get("pi-billion.txt", {
       range: {
         offset: start,
-        length: length
+        length: safeLength
       }
     });
     
@@ -39,9 +42,9 @@ app.get("/api/pi", async (c) => {
   console.log("API endpoint called with query params:", c.req.query());
   
   const start = parseInt(c.req.query("start") || "0", 10);
-  const length = parseInt(c.req.query("length") || "1000", 10);
+  const length = parseInt(c.req.query("length") || "500", 10);
 
-  if (isNaN(start) || isNaN(length) || start < 0 || length > 10_000_000) {
+  if (isNaN(start) || isNaN(length) || start < 0 || length > 10_000) {
     console.error(`Invalid query parameters: start=${start}, length=${length}`);
     return c.text("Invalid query", 400);
   }
@@ -61,9 +64,12 @@ app.get("/api/pi", async (c) => {
 app.get("/", async (c) => {
   console.log("Root route accessed, preparing server-side rendering");
   
-  // Get initial pi digits for server-side rendering (smaller chunk to avoid memory issues)
-  const initialDigits = await getPiDigits(c.env, 0, 2000) || "";
+  // Start with a much smaller initial chunk to avoid memory issues
+  const initialDigits = await getPiDigits(c.env, 0, 500) || "";
   console.log(`Initial digits length for SSR: ${initialDigits.length}`);
+  
+  // Fallback to hardcoded pi digits if we couldn't fetch from R2
+  const piDigits = initialDigits || "3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679";
   
   return c.html(
     <html lang="en">
@@ -75,13 +81,17 @@ app.get("/", async (c) => {
           body {
             margin: 0;
             padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
             font-family: monospace;
             background-color: #f5f5f5;
-            overflow: hidden;
+            overflow-y: auto;
+            height: 100vh;
+          }
+          .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
           }
           #pi-container {
             font-size: 24px;
@@ -90,20 +100,39 @@ app.get("/", async (c) => {
             text-align: center;
             max-width: 80%;
             word-wrap: break-word;
+            margin-bottom: 100vh; /* Add space at the bottom to enable scrolling */
+          }
+          #loading-indicator {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            display: none;
           }
         `}</style>
       </head>
       <body>
-        <div id="pi-container">{initialDigits}</div>
+        <div class="container">
+          <div id="pi-container">{piDigits}</div>
+          <div id="loading-indicator">Loading more digits...</div>
+        </div>
         
         <script>{`
           const piContainer = document.getElementById('pi-container');
-          let currentPosition = ${initialDigits.length};
-          const chunkSize = 500; // Smaller chunk size to avoid memory issues
+          const loadingIndicator = document.getElementById('loading-indicator');
+          let currentPosition = ${piDigits.length};
+          const chunkSize = 200; // Much smaller chunk size to avoid memory issues
+          let isLoading = false;
           
           async function fetchMorePiDigits() {
             console.log("Fetching more digits starting at position:", currentPosition);
             try {
+              loadingIndicator.style.display = 'block';
               const response = await fetch(\`/api/pi?start=\${currentPosition}&length=\${chunkSize}\`);
               if (!response.ok) {
                 console.error('Response not OK:', response.status, response.statusText);
@@ -111,15 +140,19 @@ app.get("/", async (c) => {
               }
               const digits = await response.text();
               console.log(\`Received \${digits.length} more digits\`);
+              loadingIndicator.style.display = 'none';
               return digits;
             } catch (error) {
               console.error('Error fetching more pi digits:', error);
+              loadingIndicator.style.display = 'none';
               return '';
             }
           }
           
-          async function streamPiDigits() {
-            console.log("Streaming more pi digits...");
+          async function appendDigits() {
+            if (isLoading) return;
+            isLoading = true;
+            
             try {
               const digits = await fetchMorePiDigits();
               if (digits && digits.length > 0) {
@@ -127,22 +160,26 @@ app.get("/", async (c) => {
                 piContainer.textContent += digits;
                 currentPosition += digits.length;
                 
-                // Auto-scroll to keep recent digits visible
-                window.scrollTo(0, document.body.scrollHeight);
-                
-                // Continue streaming after a short delay
-                setTimeout(streamPiDigits, 1000);
+                // Schedule next fetch after a short delay
+                setTimeout(appendDigits, 1000);
               } else {
-                console.log('No more digits returned, stopping stream');
+                console.log('No more digits returned, retrying in 3 seconds');
+                setTimeout(appendDigits, 3000);
               }
             } catch (error) {
-              console.error('Error in streamPiDigits:', error);
+              console.error('Error appending digits:', error);
+              setTimeout(appendDigits, 3000);
+            } finally {
+              isLoading = false;
             }
           }
           
           // Start streaming additional digits after a delay
-          console.log("Initial render complete, will start streaming more digits soon");
-          setTimeout(streamPiDigits, 2000);
+          console.log("Initial render complete, starting to stream more digits");
+          setTimeout(appendDigits, 1000);
+          
+          // Make sure the page is scrollable initially
+          document.body.style.height = '200vh';
         `}</script>
       </body>
     </html>
