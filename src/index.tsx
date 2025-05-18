@@ -7,22 +7,25 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-// Function to get pi digits
+// Function to get pi digits using streaming
 async function getPiDigits(env: Bindings, start: number, length: number) {
   console.log(`Fetching pi digits from ${start} to ${start + length}`);
   
   try {
-    const object = await env.PI.get("pi-billion.txt");
+    const object = await env.PI.get("pi-billion.txt", {
+      range: {
+        offset: start,
+        length: length
+      }
+    });
+    
     if (!object) {
       console.error("π file not found in R2 bucket");
       return null;
     }
     
-    console.log("Successfully retrieved pi file from R2");
-    const full = await object.text();
-    console.log(`Total pi file length: ${full.length}`);
-    
-    const slice = full.slice(start, start + length);
+    console.log("Successfully retrieved pi file slice from R2");
+    const slice = await object.text();
     console.log(`Returning slice of length: ${slice.length}`);
     return slice;
   } catch (error) {
@@ -58,8 +61,8 @@ app.get("/api/pi", async (c) => {
 app.get("/", async (c) => {
   console.log("Root route accessed, preparing server-side rendering");
   
-  // Get initial pi digits for server-side rendering
-  const initialDigits = await getPiDigits(c.env, 0, 5000) || "";
+  // Get initial pi digits for server-side rendering (smaller chunk to avoid memory issues)
+  const initialDigits = await getPiDigits(c.env, 0, 2000) || "";
   console.log(`Initial digits length for SSR: ${initialDigits.length}`);
   
   return c.html(
@@ -96,7 +99,7 @@ app.get("/", async (c) => {
         <script>{`
           const piContainer = document.getElementById('pi-container');
           let currentPosition = ${initialDigits.length};
-          const chunkSize = 1000;
+          const chunkSize = 500; // Smaller chunk size to avoid memory issues
           
           async function fetchMorePiDigits() {
             console.log("Fetching more digits starting at position:", currentPosition);
